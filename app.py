@@ -1,15 +1,22 @@
 # ============================================================
 # SISTEMA DE ALERTA TEMPRANA - RÍO LA ESTRELLA
+# V2 DEMOSTRATIVA
 # Aplicación académica CATIE
+#
+# Los datos recientes se actualizan manualmente desde
+# Google Earth Engine mediante Google Colab y luego se
+# exportan a un CSV que consume Streamlit.
 # ============================================================
 
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import json
 import pydeck as pdk
+import json
+
 from pathlib import Path
+
 
 # ============================================================
 # CONFIGURACIÓN GENERAL
@@ -23,22 +30,60 @@ st.set_page_config(
 
 
 # ============================================================
-# CARGAR DATOS
+# RUTAS DE ARCHIVOS
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+
+ARCHIVO_CSV = (
+    BASE_DIR /
+    "SAT_Rio_La_Estrella_ACTUALIZADO.csv"
+)
+
+ARCHIVO_GEOJSON = (
+    BASE_DIR /
+    "cuenca_rio_la_estrella.geojson"
+)
+
+
+# ============================================================
+# CARGAR DATOS DEL SAT
 # ============================================================
 
 @st.cache_data
 def cargar_datos():
 
+    if not ARCHIVO_CSV.exists():
+
+        st.error(
+            "No se encontró el archivo "
+            "'SAT_Rio_La_Estrella_ACTUALIZADO.csv'."
+        )
+
+        st.write(
+            "Archivos encontrados en el repositorio:"
+        )
+
+        st.write(
+            [
+                archivo.name
+                for archivo in BASE_DIR.iterdir()
+            ]
+        )
+
+        st.stop()
+
     df = pd.read_csv(
-        "SAT_Rio_La_Estrella_2020_2025.csv"
+        ARCHIVO_CSV
     )
 
+    # Convertir fecha
     df["fecha"] = pd.to_datetime(
         df["fecha"],
         errors="coerce"
     )
 
-    # Convertir variables numéricas
+    # Columnas numéricas
     columnas_numericas = [
         "lluvia_mm",
         "lluvia_24h_mm",
@@ -57,6 +102,7 @@ def cargar_datos():
                 errors="coerce"
             )
 
+    # Limpiar tabla
     df = (
         df
         .dropna(
@@ -67,6 +113,10 @@ def cargar_datos():
             ]
         )
         .sort_values("fecha")
+        .drop_duplicates(
+            subset="fecha",
+            keep="last"
+        )
         .reset_index(drop=True)
     )
 
@@ -77,60 +127,104 @@ df = cargar_datos()
 
 
 # ============================================================
-# CALCULAR UMBRALES
+# PERIODO HISTÓRICO DE REFERENCIA
 # ============================================================
 
-P90_LLUVIA = df[
-    "lluvia_24h_mm"
-].quantile(0.90)
+df_historico = df[
+    (
+        df["fecha"] >=
+        pd.Timestamp("2020-01-01")
+    )
+    &
+    (
+        df["fecha"] <=
+        pd.Timestamp("2025-12-31")
+    )
+].copy()
 
-P95_LLUVIA = df[
-    "lluvia_24h_mm"
-].quantile(0.95)
 
-P98_LLUVIA = df[
-    "lluvia_24h_mm"
-].quantile(0.98)
+if df_historico.empty:
 
-P98_HUMEDAD = df[
-    "humedad_superficial"
-].quantile(0.98)
+    st.error(
+        "No existen datos del periodo histórico "
+        "2020–2025 para calcular los umbrales."
+    )
+
+    st.stop()
 
 
 # ============================================================
-# FUNCIÓN DEL SAT
+# CALCULAR UMBRALES HISTÓRICOS
 # ============================================================
 
-def clasificar_alerta(lluvia, humedad):
+P90_LLUVIA = (
+    df_historico[
+        "lluvia_24h_mm"
+    ]
+    .quantile(0.90)
+)
 
-    # ALERTA ROJA
+P95_LLUVIA = (
+    df_historico[
+        "lluvia_24h_mm"
+    ]
+    .quantile(0.95)
+)
+
+P98_LLUVIA = (
+    df_historico[
+        "lluvia_24h_mm"
+    ]
+    .quantile(0.98)
+)
+
+P98_HUMEDAD = (
+    df_historico[
+        "humedad_superficial"
+    ]
+    .quantile(0.98)
+)
+
+
+# ============================================================
+# FUNCIÓN DE CLASIFICACIÓN DEL SAT
+# ============================================================
+
+def clasificar_alerta(
+    lluvia,
+    humedad
+):
+
     if (
         lluvia >= P98_LLUVIA
-        and humedad >= P98_HUMEDAD
+        and
+        humedad >= P98_HUMEDAD
     ):
+
         return "Rojo"
 
-    # ALERTA NARANJA
     elif (
         lluvia >= P95_LLUVIA
-        and humedad >= P98_HUMEDAD
+        and
+        humedad >= P98_HUMEDAD
     ):
+
         return "Naranja"
 
-    # ALERTA AMARILLA
     elif (
         lluvia >= P90_LLUVIA
-        and humedad >= P98_HUMEDAD
+        and
+        humedad >= P98_HUMEDAD
     ):
+
         return "Amarillo"
 
-    # CONDICIONES NORMALES
     else:
+
         return "Verde"
 
 
-# Recalcular alertas directamente en la aplicación
-
+# Recalcular niveles desde los datos
 df["alerta_app"] = df.apply(
     lambda fila: clasificar_alerta(
         fila["lluvia_24h_mm"],
@@ -138,6 +232,19 @@ df["alerta_app"] = df.apply(
     ),
     axis=1
 )
+
+
+# ============================================================
+# FECHAS DISPONIBLES
+# ============================================================
+
+ultima_fecha = df[
+    "fecha"
+].max()
+
+primera_fecha = df[
+    "fecha"
+].min()
 
 
 # ============================================================
@@ -158,12 +265,14 @@ st.caption(
 
 st.info(
     """
-    Este Sistema de Alerta Temprana constituye un ejercicio
-    académico demostrativo.
+    Este Sistema de Alerta Temprana constituye un prototipo
+    demostrativo.
 
-    Los niveles de alerta no representan alertas oficiales
-    ni han sido calibrados con niveles del río, caudales,
-    daños históricos o estaciones hidrometeorológicas.
+    Los datos recientes son obtenidos mediante Google Earth
+    Engine desde Google Colab y posteriormente incorporados
+    manualmente a la aplicación.
+
+    Los niveles mostrados no representan alertas oficiales.
     """
 )
 
@@ -178,35 +287,68 @@ st.sidebar.header(
 
 st.sidebar.markdown(
     """
-    **Periodo histórico**
+    **Fuentes**
+
+    🌧️ CHIRPS Daily
+
+    💧 SMAP Nivel 3
+
+    **Periodo histórico de referencia**
 
     2020–2025
+    """
+)
 
-    **Predictores**
+st.sidebar.success(
+    f"""
+    Último dato disponible
 
-    🌧️ Precipitación CHIRPS
-
-    💧 Humedad superficial SMAP L3
+    **{ultima_fecha.strftime('%d/%m/%Y')}**
     """
 )
 
 
 # ============================================================
-# SELECTOR DE FECHA
+# MODO DE CONSULTA
 # ============================================================
 
-fecha_seleccionada = st.sidebar.date_input(
-    "Seleccione una fecha",
-    value=df["fecha"].max().date(),
-    min_value=df["fecha"].min().date(),
-    max_value=df["fecha"].max().date()
+modo = st.sidebar.radio(
+    "Modo de consulta",
+    [
+        "Último dato disponible",
+        "Consultar histórico"
+    ]
 )
 
 
-registro = df[
-    df["fecha"].dt.date
-    == fecha_seleccionada
-]
+# ============================================================
+# SELECCIONAR REGISTRO
+# ============================================================
+
+if modo == "Último dato disponible":
+
+    fecha_consulta = (
+        ultima_fecha.date()
+    )
+
+    registro = df[
+        df["fecha"] ==
+        ultima_fecha
+    ]
+
+else:
+
+    fecha_consulta = st.sidebar.date_input(
+        "Seleccione una fecha",
+        value=ultima_fecha.date(),
+        min_value=primera_fecha.date(),
+        max_value=ultima_fecha.date()
+    )
+
+    registro = df[
+        df["fecha"].dt.date ==
+        fecha_consulta
+    ]
 
 
 # ============================================================
@@ -223,107 +365,6 @@ tab_estado, tab_mapa, tab_historial, tab_umbrales, tab_metodologia = st.tabs(
     ]
 )
 
-# ============================================================
-# TAB — MAPA DE LA CUENCA
-# ============================================================
-
-with tab_mapa:
-
-    st.header(
-        "🗺️ Cuenca del río La Estrella"
-    )
-
-    st.write(
-        """
-        Delimitación de la cuenca hidrográfica utilizada
-        para calcular la precipitación CHIRPS y la humedad
-        superficial SMAP.
-        """
-    )
-
-    # Ruta del archivo GeoJSON
-    BASE_DIR = Path(__file__).resolve().parent
-
-    archivo_geojson = (
-        BASE_DIR
-        / "cuenca_rio_la_estrella.geojson"
-    )
-
-    if not archivo_geojson.exists():
-
-        st.error(
-            "No se encontró el archivo de la cuenca."
-        )
-
-    else:
-
-        with open(
-            archivo_geojson,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            cuenca_geojson = json.load(f)
-
-
-        # Capa del polígono
-        capa_cuenca = pdk.Layer(
-            "GeoJsonLayer",
-
-            data=cuenca_geojson,
-
-            stroked=True,
-
-            filled=True,
-
-            get_fill_color=[
-                30,
-                120,
-                180,
-                60
-            ],
-
-            get_line_color=[
-                0,
-                80,
-                150
-            ],
-
-            line_width_min_pixels=2,
-
-            pickable=True
-        )
-
-
-        # Vista inicial aproximada
-        vista = pdk.ViewState(
-            latitude=9.75,
-            longitude=-82.95,
-            zoom=9,
-            pitch=0
-        )
-
-
-        mapa = pdk.Deck(
-            layers=[
-                capa_cuenca
-            ],
-
-            initial_view_state=vista,
-
-            map_style=None,
-
-            tooltip={
-                "text":
-                "Cuenca del río La Estrella"
-            }
-        )
-
-
-        st.pydeck_chart(
-            mapa,
-            height=550
-        )
 
 # ============================================================
 # TAB 1 — ESTADO DEL SAT
@@ -331,14 +372,24 @@ with tab_mapa:
 
 with tab_estado:
 
-    st.header(
-        "Estado del SAT"
-    )
+    if modo == "Último dato disponible":
+
+        st.header(
+            "Último estado disponible"
+        )
+
+    else:
+
+        st.header(
+            "Estado histórico del SAT"
+        )
+
 
     if registro.empty:
 
         st.warning(
-            "No existen datos disponibles para la fecha seleccionada."
+            "No existen datos disponibles "
+            "para la fecha seleccionada."
         )
 
     else:
@@ -358,8 +409,14 @@ with tab_estado:
         ]
 
 
+        st.caption(
+            f"Fecha del dato: "
+            f"{fila['fecha'].strftime('%d/%m/%Y')}"
+        )
+
+
         # ====================================================
-        # PANEL PRINCIPAL DE ALERTA
+        # PANEL DE ALERTA
         # ====================================================
 
         if alerta == "Rojo":
@@ -368,12 +425,11 @@ with tab_estado:
                 """
                 ## 🔴 ALERTA ROJA
 
-                Se identifican condiciones extremas de
-                precipitación y elevada humedad superficial
-                del suelo.
+                Se identifican simultáneamente condiciones
+                extremas de precipitación y alta humedad
+                superficial del suelo.
                 """
             )
-
 
         elif alerta == "Naranja":
 
@@ -381,11 +437,10 @@ with tab_estado:
                 """
                 ## 🟠 ALERTA NARANJA
 
-                Se identifican condiciones muy elevadas
-                de precipitación y humedad del suelo.
+                Se identifican condiciones muy elevadas de
+                precipitación sobre un suelo con alta humedad.
                 """
             )
-
 
         elif alerta == "Amarillo":
 
@@ -393,11 +448,10 @@ with tab_estado:
                 """
                 ## 🟡 ALERTA AMARILLA
 
-                Se identifican condiciones elevadas que
-                requieren seguimiento.
+                Se identifican condiciones elevadas de lluvia
+                y humedad que requieren seguimiento.
                 """
             )
-
 
         else:
 
@@ -405,19 +459,18 @@ with tab_estado:
                 """
                 ## 🟢 CONDICIONES NORMALES
 
-                No se identifican condiciones extremas según
-                los umbrales estadísticos utilizados por
-                este SAT académico.
+                No se identifican simultáneamente condiciones
+                extremas de precipitación y humedad según los
+                umbrales del SAT.
                 """
             )
 
 
         # ====================================================
-        # MÉTRICAS PRINCIPALES
+        # MÉTRICAS
         # ====================================================
 
         col1, col2, col3, col4 = st.columns(4)
-
 
         col1.metric(
             "🌧️ Precipitación 24 h",
@@ -425,7 +478,13 @@ with tab_estado:
         )
 
 
-        if "lluvia_48h_mm" in df.columns:
+        if (
+            "lluvia_48h_mm" in fila.index
+            and
+            pd.notna(
+                fila["lluvia_48h_mm"]
+            )
+        ):
 
             col2.metric(
                 "🌧️ Precipitación 48 h",
@@ -440,7 +499,13 @@ with tab_estado:
             )
 
 
-        if "lluvia_72h_mm" in df.columns:
+        if (
+            "lluvia_72h_mm" in fila.index
+            and
+            pd.notna(
+                fila["lluvia_72h_mm"]
+            )
+        ):
 
             col3.metric(
                 "🌧️ Precipitación 72 h",
@@ -465,11 +530,11 @@ with tab_estado:
 
 
         # ====================================================
-        # EXPLICACIÓN DE LA ALERTA
+        # EXPLICACIÓN
         # ====================================================
 
         st.subheader(
-            "¿Por qué se generó esta condición?"
+            "¿Por qué se obtuvo este nivel?"
         )
 
 
@@ -498,21 +563,17 @@ with tab_estado:
         with col2:
 
             st.markdown(
-                "#### 💧 Humedad del suelo"
+                "#### 💧 Humedad superficial"
             )
 
             st.write(
                 f"""
                 **Valor observado:** {humedad:.3f} m³/m³
 
-                **P98:** {P98_HUMEDAD:.3f} m³/m³
+                **P98 histórico:** {P98_HUMEDAD:.3f} m³/m³
                 """
             )
 
-
-        # ====================================================
-        # INTERPRETACIÓN AUTOMÁTICA
-        # ====================================================
 
         st.subheader(
             "Interpretación"
@@ -524,59 +585,286 @@ with tab_estado:
             st.write(
                 """
                 La precipitación acumulada en 24 horas
-                alcanzó o superó el percentil P98 y la
-                humedad superficial del suelo también
-                alcanzó o superó su percentil P98.
+                alcanzó o superó el P98 histórico y la
+                humedad superficial también alcanzó o
+                superó su P98.
 
-                La coincidencia entre lluvia extrema y
-                condiciones de alta humedad determina la
-                clasificación como **Alerta Roja**.
+                La coincidencia de ambas condiciones genera
+                una **Alerta Roja**.
                 """
             )
-
 
         elif alerta == "Naranja":
 
             st.write(
                 """
-                La precipitación acumulada en 24 horas
-                alcanzó o superó el percentil P95 y la
-                humedad superficial del suelo alcanzó el
-                umbral de alta humedad.
+                La precipitación alcanzó o superó el P95
+                histórico y la humedad superficial alcanzó
+                o superó su P98.
 
-                Estas condiciones corresponden a una
+                El sistema clasifica estas condiciones como
                 **Alerta Naranja**.
                 """
             )
-
 
         elif alerta == "Amarillo":
 
             st.write(
                 """
-                La precipitación acumulada en 24 horas
-                alcanzó o superó el percentil P90 y el
-                suelo presenta condiciones elevadas de
-                humedad.
+                La precipitación alcanzó o superó el P90
+                histórico y la humedad superficial alcanzó
+                o superó su P98.
 
-                Estas condiciones corresponden a una
+                El sistema clasifica estas condiciones como
                 **Alerta Amarilla**.
                 """
             )
-
 
         else:
 
             st.write(
                 """
-                La combinación de precipitación y humedad
-                del suelo no supera simultáneamente los
-                umbrales definidos para los niveles de
-                alerta.
+                Las condiciones de precipitación y humedad
+                no alcanzan simultáneamente los umbrales
+                necesarios para activar una alerta.
 
-                El sistema clasifica la fecha seleccionada
-                como **condición normal**.
+                El sistema clasifica esta fecha como
+                **condición normal**.
                 """
+            )
+
+
+# ============================================================
+# TAB 2 — MAPA
+# ============================================================
+
+with tab_mapa:
+
+    st.header(
+        "🗺️ Cuenca del río La Estrella"
+    )
+
+    st.write(
+        """
+        El mapa muestra la delimitación de la cuenca
+        hidrográfica utilizada como unidad espacial de
+        análisis para calcular la precipitación CHIRPS
+        y la humedad superficial SMAP.
+        """
+    )
+
+
+    if not ARCHIVO_GEOJSON.exists():
+
+        st.error(
+            "No se encontró el archivo "
+            "'cuenca_rio_la_estrella.geojson'."
+        )
+
+    else:
+
+        # ====================================================
+        # CARGAR GEOJSON
+        # ====================================================
+
+        with open(
+            ARCHIVO_GEOJSON,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            cuenca_geojson = json.load(f)
+
+
+        # ====================================================
+        # DETERMINAR COLOR SEGÚN ALERTA
+        # ====================================================
+
+        if not registro.empty:
+
+            nivel_mapa = (
+                registro.iloc[0][
+                    "alerta_app"
+                ]
+            )
+
+        else:
+
+            nivel_mapa = "Verde"
+
+
+        if nivel_mapa == "Rojo":
+
+            color_relleno = [
+                220,
+                40,
+                40,
+                110
+            ]
+
+            color_linea = [
+                160,
+                0,
+                0
+            ]
+
+
+        elif nivel_mapa == "Naranja":
+
+            color_relleno = [
+                255,
+                140,
+                0,
+                110
+            ]
+
+            color_linea = [
+                200,
+                90,
+                0
+            ]
+
+
+        elif nivel_mapa == "Amarillo":
+
+            color_relleno = [
+                255,
+                210,
+                0,
+                110
+            ]
+
+            color_linea = [
+                180,
+                150,
+                0
+            ]
+
+
+        else:
+
+            color_relleno = [
+                50,
+                170,
+                80,
+                90
+            ]
+
+            color_linea = [
+                0,
+                110,
+                40
+            ]
+
+
+        # ====================================================
+        # CAPA GEOJSON
+        # ====================================================
+
+        capa_cuenca = pdk.Layer(
+            "GeoJsonLayer",
+
+            data=cuenca_geojson,
+
+            stroked=True,
+
+            filled=True,
+
+            opacity=0.45,
+
+            get_fill_color=color_relleno,
+
+            get_line_color=color_linea,
+
+            line_width_min_pixels=2,
+
+            pickable=True
+        )
+
+
+        # ====================================================
+        # VISTA
+        # ====================================================
+
+        vista = pdk.ViewState(
+            latitude=9.72,
+            longitude=-82.95,
+            zoom=9.3,
+            pitch=0,
+            bearing=0
+        )
+
+
+        # ====================================================
+        # MAPA
+        # ====================================================
+
+        mapa = pdk.Deck(
+            layers=[
+                capa_cuenca
+            ],
+
+            initial_view_state=vista,
+
+            map_style=None,
+
+            tooltip={
+                "html":
+                f"""
+                <b>Cuenca del río La Estrella</b>
+                <br>
+                Nivel SAT: <b>{nivel_mapa}</b>
+                """
+            }
+        )
+
+
+        st.pydeck_chart(
+            mapa,
+            use_container_width=True,
+            height=550
+        )
+
+
+        st.caption(
+            """
+            El color del polígono representa el nivel de
+            alerta correspondiente a la fecha seleccionada.
+            """
+        )
+
+
+        # ====================================================
+        # CONDICIONES DE LA FECHA
+        # ====================================================
+
+        if not registro.empty:
+
+            fila_mapa = registro.iloc[0]
+
+            st.subheader(
+                "Condiciones de la fecha seleccionada"
+            )
+
+
+            col1, col2, col3 = st.columns(3)
+
+
+            col1.metric(
+                "🌧️ Lluvia 24 h",
+                f"{fila_mapa['lluvia_24h_mm']:.1f} mm"
+            )
+
+
+            col2.metric(
+                "💧 Humedad superficial",
+                f"{fila_mapa['humedad_superficial']:.3f} m³/m³"
+            )
+
+
+            col3.metric(
+                "🚨 Nivel",
+                fila_mapa["alerta_app"]
             )
 
 
@@ -584,19 +872,24 @@ with tab_estado:
 # PREPARAR DATOS MENSUALES
 # ============================================================
 
-df["Año"] = df[
-    "fecha"
-].dt.year
+df["Año"] = (
+    df["fecha"]
+    .dt.year
+)
 
-df["Mes"] = df[
-    "fecha"
-].dt.month
+df["Mes"] = (
+    df["fecha"]
+    .dt.month
+)
 
 
 mensual = (
     df
     .groupby(
-        ["Año", "Mes"],
+        [
+            "Año",
+            "Mes"
+        ],
         as_index=False
     )
     .agg(
@@ -615,15 +908,21 @@ mensual = (
 
 mensual["Fecha"] = pd.to_datetime(
     dict(
-        year=mensual["Año"],
-        month=mensual["Mes"],
+        year=mensual[
+            "Año"
+        ],
+
+        month=mensual[
+            "Mes"
+        ],
+
         day=1
     )
 )
 
 
 # ============================================================
-# TAB 2 — HISTORIAL
+# TAB 3 — HISTORIAL
 # ============================================================
 
 with tab_historial:
@@ -633,12 +932,20 @@ with tab_historial:
     )
 
 
-    # ========================================================
-    # FILTRO POR AÑO
-    # ========================================================
+    st.caption(
+        f"Serie disponible: "
+        f"{primera_fecha.strftime('%d/%m/%Y')} "
+        f"– "
+        f"{ultima_fecha.strftime('%d/%m/%Y')}"
+    )
+
 
     años = sorted(
-        df["fecha"].dt.year.unique()
+        df[
+            "fecha"
+        ]
+        .dt.year
+        .unique()
     )
 
 
@@ -650,28 +957,28 @@ with tab_historial:
 
 
     mensual_filtrado = mensual[
-        mensual["Año"].isin(
+        mensual[
+            "Año"
+        ]
+        .isin(
             años_seleccionados
         )
     ]
 
 
-    # ========================================================
-    # GRÁFICOS EN DOS COLUMNAS
-    # ========================================================
-
     col1, col2 = st.columns(2)
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # PRECIPITACIÓN MENSUAL
-    # --------------------------------------------------------
+    # ========================================================
 
     with col1:
 
         st.subheader(
             "🌧️ Precipitación mensual"
         )
+
 
         fig, ax = plt.subplots(
             figsize=(9, 5)
@@ -695,45 +1002,58 @@ with tab_historial:
             "Precipitación acumulada mensual CHIRPS"
         )
 
+
         ax.set_ylabel(
             "Precipitación (mm)"
         )
+
 
         ax.set_xlabel(
             "Fecha"
         )
 
+
         ax.xaxis.set_major_locator(
             mdates.YearLocator()
         )
 
+
         ax.xaxis.set_major_formatter(
-            mdates.DateFormatter("%Y")
+            mdates.DateFormatter(
+                "%Y"
+            )
         )
+
 
         ax.grid(
             axis="y",
             alpha=0.3
         )
 
+
         plt.xticks(
             rotation=45
         )
 
+
         plt.tight_layout()
 
-        st.pyplot(fig)
+
+        st.pyplot(
+            fig
+        )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # HUMEDAD MENSUAL
-    # --------------------------------------------------------
+    # ========================================================
 
     with col2:
 
         st.subheader(
             "💧 Humedad superficial"
         )
+
 
         fig, ax = plt.subplots(
             figsize=(9, 5)
@@ -757,71 +1077,106 @@ with tab_historial:
             "Humedad superficial media mensual SMAP L3"
         )
 
+
         ax.set_ylabel(
             "Humedad superficial (m³/m³)"
         )
+
 
         ax.set_xlabel(
             "Fecha"
         )
 
+
         ax.xaxis.set_major_locator(
             mdates.YearLocator()
         )
 
+
         ax.xaxis.set_major_formatter(
-            mdates.DateFormatter("%Y")
+            mdates.DateFormatter(
+                "%Y"
+            )
         )
+
 
         ax.grid(
             axis="y",
             alpha=0.3
         )
 
+
         plt.xticks(
             rotation=45
         )
 
+
         plt.tight_layout()
 
-        st.pyplot(fig)
+
+        st.pyplot(
+            fig
+        )
 
 
     st.divider()
 
 
     # ========================================================
-    # EVENTOS HISTÓRICOS DE ALERTA
+    # EVENTOS DE ALERTA
     # ========================================================
 
     st.subheader(
-        "🚨 Eventos históricos de alerta"
+        "🚨 Eventos clasificados con alerta"
     )
 
 
+    columnas_eventos = [
+        "fecha",
+        "lluvia_24h_mm",
+        "lluvia_48h_mm",
+        "lluvia_72h_mm",
+        "humedad_superficial",
+        "alerta_app"
+    ]
+
+
+    columnas_eventos = [
+        columna
+        for columna in columnas_eventos
+        if columna in df.columns
+    ]
+
+
     eventos = df[
-        df["alerta_app"]
-        != "Verde"
-    ][
-        [
-            "fecha",
-            "lluvia_24h_mm",
-            "lluvia_48h_mm",
-            "lluvia_72h_mm",
-            "humedad_superficial",
+        df[
             "alerta_app"
         ]
+        != "Verde"
+    ][
+        columnas_eventos
     ].copy()
 
 
     eventos = eventos.rename(
         columns={
-            "fecha": "Fecha",
-            "lluvia_24h_mm": "Lluvia 24 h (mm)",
-            "lluvia_48h_mm": "Lluvia 48 h (mm)",
-            "lluvia_72h_mm": "Lluvia 72 h (mm)",
-            "humedad_superficial": "Humedad (m³/m³)",
-            "alerta_app": "Nivel de alerta"
+            "fecha":
+                "Fecha",
+
+            "lluvia_24h_mm":
+                "Lluvia 24 h (mm)",
+
+            "lluvia_48h_mm":
+                "Lluvia 48 h (mm)",
+
+            "lluvia_72h_mm":
+                "Lluvia 72 h (mm)",
+
+            "humedad_superficial":
+                "Humedad (m³/m³)",
+
+            "alerta_app":
+                "Nivel de alerta"
         }
     )
 
@@ -834,19 +1189,26 @@ with tab_historial:
 
 
 # ============================================================
-# TAB 3 — UMBRALES
+# TAB 4 — UMBRALES
 # ============================================================
 
 with tab_umbrales:
 
     st.header(
-        "Umbrales estadísticos del SAT"
+        "Umbrales históricos del SAT"
     )
 
 
-    # ========================================================
-    # MÉTRICAS
-    # ========================================================
+    st.info(
+        """
+        Los umbrales se calculan exclusivamente utilizando
+        el periodo histórico 2020–2025.
+
+        Los datos posteriores a 2025 se comparan contra
+        estos valores, pero no modifican los percentiles.
+        """
+    )
+
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -878,21 +1240,17 @@ with tab_umbrales:
     st.divider()
 
 
-    # ========================================================
-    # GRÁFICOS DE DISTRIBUCIÓN
-    # ========================================================
-
     col1, col2 = st.columns(2)
 
 
-    # --------------------------------------------------------
-    # DISTRIBUCIÓN PRECIPITACIÓN
-    # --------------------------------------------------------
+    # ========================================================
+    # HISTOGRAMA PRECIPITACIÓN
+    # ========================================================
 
     with col1:
 
         st.subheader(
-            "Distribución de precipitación"
+            "Distribución histórica de precipitación"
         )
 
 
@@ -902,7 +1260,7 @@ with tab_umbrales:
 
 
         ax.hist(
-            df[
+            df_historico[
                 "lluvia_24h_mm"
             ].dropna(),
 
@@ -932,7 +1290,7 @@ with tab_umbrales:
 
 
         ax.set_xlabel(
-            "Precipitación acumulada 24 h (mm)"
+            "Precipitación 24 h (mm)"
         )
 
 
@@ -953,17 +1311,19 @@ with tab_umbrales:
         plt.tight_layout()
 
 
-        st.pyplot(fig)
+        st.pyplot(
+            fig
+        )
 
 
-    # --------------------------------------------------------
-    # DISTRIBUCIÓN HUMEDAD
-    # --------------------------------------------------------
+    # ========================================================
+    # HISTOGRAMA HUMEDAD
+    # ========================================================
 
     with col2:
 
         st.subheader(
-            "Distribución de humedad"
+            "Distribución histórica de humedad"
         )
 
 
@@ -973,7 +1333,7 @@ with tab_umbrales:
 
 
         ax.hist(
-            df[
+            df_historico[
                 "humedad_superficial"
             ].dropna(),
 
@@ -1013,7 +1373,9 @@ with tab_umbrales:
         plt.tight_layout()
 
 
-        st.pyplot(fig)
+        st.pyplot(
+            fig
+        )
 
 
     # ========================================================
@@ -1042,7 +1404,7 @@ with tab_umbrales:
             ],
 
             "Humedad superficial": [
-                "Sin condición crítica",
+                "No cumple ambos criterios",
                 f"≥ {P98_HUMEDAD:.3f} m³/m³",
                 f"≥ {P98_HUMEDAD:.3f} m³/m³",
                 f"≥ {P98_HUMEDAD:.3f} m³/m³"
@@ -1066,7 +1428,7 @@ with tab_umbrales:
 
 
 # ============================================================
-# TAB 4 — METODOLOGÍA
+# TAB 5 — METODOLOGÍA
 # ============================================================
 
 with tab_metodologia:
@@ -1080,90 +1442,128 @@ with tab_metodologia:
         """
         ### Objetivo
 
-        El Sistema de Alerta Temprana fue desarrollado como
-        un ejercicio académico para identificar condiciones
-        hidrometeorológicas potencialmente favorables para
-        inundaciones en la cuenca del río La Estrella.
+        El Sistema de Alerta Temprana fue desarrollado
+        como un ejercicio académico para identificar
+        condiciones hidrometeorológicas potencialmente
+        favorables para inundaciones en la cuenca del
+        río La Estrella.
 
-        El análisis utiliza información correspondiente al
-        periodo **2020–2025**.
+
+        ### 📚 Periodo histórico de referencia
+
+        Los umbrales fueron definidos utilizando
+        exclusivamente el periodo **2020–2025**.
+
+        Este periodo constituye la línea base histórica
+        del SAT.
 
 
         ### 🌧️ Precipitación
 
-        La precipitación se obtuvo a partir del producto
-        satelital **CHIRPS Daily**.
+        La precipitación se obtiene del producto
+        **CHIRPS Daily** mediante Google Earth Engine.
 
-        A partir de la precipitación diaria media sobre la
-        cuenca se calcularon acumulados de:
+        Se calculan acumulados de:
 
         - 24 horas
         - 48 horas
         - 72 horas
 
-        La precipitación acumulada de **24 horas** es la
-        variable utilizada para definir los niveles de alerta.
+        La precipitación de **24 horas** es la variable
+        utilizada para determinar el nivel de alerta.
 
 
-        ### 💧 Humedad superficial del suelo
+        ### 💧 Humedad superficial
 
-        La humedad superficial se obtuvo mediante el producto
+        La humedad superficial se obtiene del producto
         **SMAP Nivel 3**.
 
-        La variable representa el contenido volumétrico de
-        agua en la capa superficial del suelo.
+        Esta variable representa el contenido volumétrico
+        de agua en la capa superficial del suelo.
 
 
-        ### 🎯 Definición de umbrales
+        ### 🎯 Umbrales
 
-        Los umbrales fueron calculados utilizando la
-        distribución histórica de las observaciones diarias
-        disponibles entre 2020 y 2025.
-
-        Para la precipitación se utilizaron:
+        Para precipitación:
 
         - **P90:** condición elevada
         - **P95:** condición muy elevada
         - **P98:** condición extrema
 
-        Para la humedad superficial se utilizó:
+        Para humedad:
 
-        - **P98:** condición de alta humedad del suelo
+        - **P98:** condición de alta humedad
 
 
         ### 🚨 Funcionamiento del SAT
 
-        El sistema evalúa simultáneamente dos variables:
+        El sistema utiliza simultáneamente:
 
-        1. Precipitación acumulada en 24 horas.
-        2. Humedad superficial del suelo.
+        1. precipitación acumulada en 24 horas;
+        2. humedad superficial del suelo.
 
-        Una alerta se activa solamente cuando la precipitación
-        supera el umbral correspondiente **y**, simultáneamente,
-        la humedad superficial alcanza o supera su P98.
+        **Amarillo**
 
-        Esto representa de forma simplificada el principio
-        hidrológico de que una lluvia intensa puede producir
-        una mayor respuesta de escorrentía cuando ocurre sobre
-        un suelo previamente húmedo.
+        Precipitación ≥ P90  
+        y humedad ≥ P98.
+
+        **Naranja**
+
+        Precipitación ≥ P95  
+        y humedad ≥ P98.
+
+        **Rojo**
+
+        Precipitación ≥ P98  
+        y humedad ≥ P98.
+
+
+        ### 🔄 Actualización
+
+        La aplicación no consulta Earth Engine
+        directamente.
+
+        Los datos recientes se actualizan mediante
+        Google Colab.
+
+        El flujo es:
+
+        1. consultar CHIRPS y SMAP en Earth Engine;
+        2. integrar los datos recientes;
+        3. combinarlos con la base histórica;
+        4. eliminar fechas duplicadas;
+        5. recalcular los niveles de alerta;
+        6. exportar un CSV actualizado;
+        7. cargar el CSV en GitHub;
+        8. Streamlit actualiza el dashboard.
+
+
+        ### 🗺️ Unidad espacial
+
+        La cuenca del río La Estrella constituye la
+        unidad espacial de análisis.
+
+        Tanto la precipitación CHIRPS como la humedad
+        SMAP corresponden a valores medios calculados
+        sobre esta geometría.
 
 
         ### ⚠️ Limitaciones
 
-        Este SAT es exclusivamente un ejercicio académico.
+        Este SAT constituye exclusivamente un ejercicio
+        académico.
 
         Los umbrales:
 
         - no han sido calibrados con niveles del río;
         - no utilizan caudales observados;
-        - no utilizan estaciones meteorológicas locales;
-        - no han sido validados con registros históricos
-          completos de inundaciones;
+        - no incorporan estaciones meteorológicas locales;
+        - no han sido validados contra un inventario
+          completo de inundaciones;
         - no deben interpretarse como alertas oficiales.
 
-        El sistema demuestra una metodología para combinar
-        precipitación y humedad del suelo mediante umbrales
-        estadísticos.
+        La fecha mostrada corresponde al último dato
+        simultáneamente disponible de CHIRPS y SMAP.
         """
     )
 
@@ -1174,10 +1574,13 @@ with tab_metodologia:
 
 st.divider()
 
+
 st.caption(
-    """
+    f"""
     Sistema de Alerta Temprana — Cuenca del río La Estrella |
     Ejercicio académico CATIE |
-    Datos: CHIRPS y SMAP L3
+    CHIRPS + SMAP L3 |
+    Último dato disponible:
+    {ultima_fecha.strftime('%d/%m/%Y')}
     """
 )
