@@ -7,7 +7,9 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-
+import json
+import pydeck as pdk
+from pathlib import Path
 
 # ============================================================
 # CONFIGURACIÓN GENERAL
@@ -211,15 +213,117 @@ registro = df[
 # CREAR PESTAÑAS
 # ============================================================
 
-tab_estado, tab_historial, tab_umbrales, tab_metodologia = st.tabs(
+tab_estado, tab_mapa, tab_historial, tab_umbrales, tab_metodologia = st.tabs(
     [
         "🚨 Estado del SAT",
+        "🗺️ Mapa",
         "📊 Historial",
         "🎯 Umbrales",
         "ℹ️ Metodología"
     ]
 )
 
+# ============================================================
+# TAB — MAPA DE LA CUENCA
+# ============================================================
+
+with tab_mapa:
+
+    st.header(
+        "🗺️ Cuenca del río La Estrella"
+    )
+
+    st.write(
+        """
+        Delimitación de la cuenca hidrográfica utilizada
+        para calcular la precipitación CHIRPS y la humedad
+        superficial SMAP.
+        """
+    )
+
+    # Ruta del archivo GeoJSON
+    BASE_DIR = Path(__file__).resolve().parent
+
+    archivo_geojson = (
+        BASE_DIR
+        / "cuenca_rio_la_estrella.geojson"
+    )
+
+    if not archivo_geojson.exists():
+
+        st.error(
+            "No se encontró el archivo de la cuenca."
+        )
+
+    else:
+
+        with open(
+            archivo_geojson,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            cuenca_geojson = json.load(f)
+
+
+        # Capa del polígono
+        capa_cuenca = pdk.Layer(
+            "GeoJsonLayer",
+
+            data=cuenca_geojson,
+
+            stroked=True,
+
+            filled=True,
+
+            get_fill_color=[
+                30,
+                120,
+                180,
+                60
+            ],
+
+            get_line_color=[
+                0,
+                80,
+                150
+            ],
+
+            line_width_min_pixels=2,
+
+            pickable=True
+        )
+
+
+        # Vista inicial aproximada
+        vista = pdk.ViewState(
+            latitude=9.75,
+            longitude=-82.95,
+            zoom=9,
+            pitch=0
+        )
+
+
+        mapa = pdk.Deck(
+            layers=[
+                capa_cuenca
+            ],
+
+            initial_view_state=vista,
+
+            map_style=None,
+
+            tooltip={
+                "text":
+                "Cuenca del río La Estrella"
+            }
+        )
+
+
+        st.pydeck_chart(
+            mapa,
+            height=550
+        )
 
 # ============================================================
 # TAB 1 — ESTADO DEL SAT
